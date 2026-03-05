@@ -1,0 +1,52 @@
+---
+const posts = Object.values(
+	import.meta.glob("../pages/*/**.astro", { eager: true }),
+);
+---
+
+<div class="buttons">
+	<a class="home-button" href="/">Home</a>
+	<button class="popover-toggle" popovertarget="my-dialog">File</button>
+</div>
+
+<dialog id="my-dialog" popover>
+	<div class="link-list">
+		<ul>
+			{
+				posts.map((item: any) => (
+					<li>
+						<a href={`${item.url}`}>{item.url}</a>
+					</li>
+				))
+			}
+		</ul>
+	</div>
+</dialog>
+
+<style>
+	.buttons {
+		font-size: 2rem;
+		position: absolute;
+		top: 2rem;
+		left: 2rem;
+		padding: 1rem 2rem;
+	}
+	.popover-toggle {
+		border: none;
+		font-size: 2rem;
+		background-color: transparent;
+		text-decoration: underline;
+		padding: 1rem 2rem;
+		font-family: unset;
+		color: green;
+	}
+	.home-button {
+		padding: 2rem;
+		color: green;
+	}
+	.link-list {
+		text-align: center;
+		padding: 2rem;
+		font-size: 2rem;
+	}
+</style>
