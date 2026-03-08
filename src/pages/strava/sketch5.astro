@@ -1,0 +1,305 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import { segmentData } from "../../data/strava";
+---
+
+<script
+	id="my-data"
+	type="application/json"
+	set:html={JSON.stringify(segmentData)}
+	is:inline
+/>
+<Layout />
+
+<script>
+	import * as THREE from "three";
+	import { ParametricGeometry } from "three/examples/jsm/Addons.js";
+	import { OrbitControls } from "three/examples/jsm/Addons.js";
+	import { GLTFExporter } from "three/examples/jsm/Addons.js";
+	import { GLTFLoader } from "three/examples/jsm/Addons.js";
+
+	const jsonDataElement = document.getElementById("my-data");
+	const clientData = JSON.parse(jsonDataElement.innerText);
+	const loader = new GLTFLoader();
+	const scene = new THREE.Scene();
+	scene.background = new THREE.Color(0xeeeeee);
+	scene.fog = new THREE.Fog(0xeeeeee, 30, 100);
+	const camera = new THREE.PerspectiveCamera(
+		80,
+		window.innerWidth / window.innerHeight,
+		0.1,
+		1000,
+	);
+	// camera.position.set(0, 5, 10);
+	// camera.lookAt(scene.position);
+
+	const renderer = new THREE.WebGLRenderer({ antialias: true });
+	renderer.setSize(window.innerWidth, window.innerHeight);
+	const container = document.getElementById("canvas-container");
+	container?.appendChild(renderer.domElement);
+
+	const dashShaderMaterial = new THREE.ShaderMaterial({
+		uniforms: {
+			uDashSize: { value: 0.4 }, // Number of dashes across the surface
+			uGapSize: { value: 0.4 }, // Ratio of dash to gap (0.0 to 1.0)
+			stripeColor: { value: new THREE.Color(0xeeeeee) },
+			roadColor: { value: new THREE.Color(0xffffff) },
+			uColor: { value: new THREE.Color(0xff0000) },
+		},
+		vertexShader: `
+		    varying vec2 vUv;
+		    void main() {
+		      vUv = uv;
+		      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+		    }
+		  `,
+		fragmentShader: `
+    uniform vec3 uColor;
+	uniform vec3 roadColor;
+	uniform vec3 stripeColor;
+    uniform float uDashSize;
+    uniform float uGapSize;
+    varying vec2 vUv;
+
+    void main() {
+      // Create repeating pattern along the Y axis
+      float totalSize = uDashSize + uGapSize;
+      float pos = mod(vUv.x * 20.0, totalSize); // Scale 10.0 adjusts frequency
+	  float thickness = 0.25; 
+      float mask = smoothstep(1.0 - thickness, 1.0 + thickness, pos);
+
+	  vec3 color = mix(roadColor, stripeColor, mask);
+
+      // Discard pixels in the "gap" to make them transparent
+      if (pos > uDashSize) color = stripeColor;
+
+      // Draw the dash (centered horizontally)
+
+      if (vUv.y > 0.502 || vUv.y < 0.498 ) color = roadColor;
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `,
+		side: THREE.DoubleSide, // So we can see the inside of the dashed mesh
+	});
+
+	const gltf = loader.load("/road-centeruv.glb", (obj) => {
+		const model = obj.scene;
+		model.traverse((child) => {
+			if (child.isMesh) {
+				child.material = dashShaderMaterial;
+				// Optionally enable shadows
+				child.castShadow = true;
+				child.receiveShadow = true;
+			}
+		});
+
+		scene.add(model);
+	});
+
+	const width = 100000000000;
+	const height = 2000;
+	const widthSegments = 1000; // Optional, default is 1
+	const heightSegments = 1000; // Optional, default is 1
+	const geometry2 = new THREE.PlaneGeometry(
+		width,
+		height,
+		widthSegments,
+		heightSegments,
+	);
+	const material2 = new THREE.MeshBasicMaterial({
+		color: 0xcccccc, // Green color
+		side: THREE.DoubleSide, // Makes the plane visible from both sides
+	});
+	const plane = new THREE.Mesh(geometry2, material2);
+	plane.rotation.x = Math.PI / 2;
+	plane.position.y -= 0.4;
+	scene.add(plane);
+	// const controls = new OrbitControls(camera, renderer.domElement);
+	// controls.enableDamping = true;
+
+	const ambientLight = new THREE.AmbientLight("white", 0.3);
+	scene.add(ambientLight);
+
+	var topLight = new THREE.DirectionalLight("white", 0 * 0.3);
+	topLight.position.set(0, 0, 1);
+	scene.add(topLight);
+
+	var light = new THREE.DirectionalLight("white", 1);
+	scene.add(light);
+
+	var gridHelper = new THREE.GridHelper(100, 100);
+	// scene.add(gridHelper);
+
+	const vectorData = clientData.map(
+		(data: any) => new THREE.Vector3(data.x, 0, data.z),
+	);
+	console.log(vectorData);
+	const geometry = new THREE.BufferGeometry().setFromPoints(vectorData);
+	const material = new THREE.LineBasicMaterial({ color: 0xff0000 });
+	const line = new THREE.Line(geometry, material);
+	scene.add(line);
+
+	// var ls = 200; // length segments
+	// var curve = new THREE.CatmullRomCurve3(vectorData);
+	// var points = curve.getPoints(ls);
+	// var curveGeometry = new THREE.BufferGeometry().setFromPoints(points);
+	// var curveMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+	// var curveLine = new THREE.Line(curveGeometry, curveMaterial);
+	// scene.add(curveLine);
+
+	// const curve = new THREE.CatmullRomCurve3(vectorData);
+	const curve = new THREE.CatmullRomCurve3(
+		vectorData,
+		false,
+		"catmullrom",
+		0.75,
+	);
+	
+	const ribbonGeom = createCurveRibbon(curve, 2, 100);
+	const ribbonMesh = new THREE.Mesh(
+		ribbonGeom,
+		new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide }),
+	);
+	// scene.add(ribbonMesh);
+
+	function createCurveRibbon(curve, width = 2, segments = 64) {
+		const points = curve.getPoints(segments);
+		const vertices = [];
+		const indices = [];
+		const up = new THREE.Vector3(0, 1, 0); // World Up
+
+		// 1. Generate Vertices
+		for (let i = 0; i <= segments; i++) {
+			const t = i / segments;
+			const point = points[i];
+			const tangent = curve.getTangentAt(t);
+
+			// Calculate the "side" vector (Binormal)
+			const side = new THREE.Vector3().crossVectors(tangent, up).normalize();
+
+			// Create left and right points
+			const leftPos = new THREE.Vector3()
+				.copy(point)
+				.addScaledVector(side, width / 2);
+			const rightPos = new THREE.Vector3()
+				.copy(point)
+				.addScaledVector(side, -width / 2);
+
+			vertices.push(leftPos.x, leftPos.y, leftPos.z);
+			vertices.push(rightPos.x, rightPos.y, rightPos.z);
+
+			// 2. Generate Indices (Face construction)
+			if (i < segments) {
+				const a = i * 2;
+				const b = i * 2 + 1;
+				const c = (i + 1) * 2;
+				const d = (i + 1) * 2 + 1;
+
+				// Two triangles per segment
+				indices.push(a, b, c);
+				indices.push(b, d, c);
+			}
+		}
+
+		const geometry = new THREE.BufferGeometry();
+		geometry.setAttribute(
+			"position",
+			new THREE.Float32BufferAttribute(vertices, 3),
+		);
+		geometry.setIndex(indices);
+		geometry.computeVertexNormals(); // Important for lighting
+
+		return geometry;
+	}
+
+	const obj3d = new THREE.Object3D();
+	camera.position.set(0, 2, -5);
+	obj3d.add(camera);
+	let fraction = 0; // Progress from 0 to 1
+	const up = new THREE.Vector3(0, 1, 0);
+	const axis = new THREE.Vector3();
+
+	var btn = document.createElement("button");
+	document.body.appendChild(btn);
+	btn.textContent = "Download .glb";
+	btn.onclick = download;
+
+	function download() {
+		const exporter = new GLTFExporter();
+		exporter.parse(
+			scene,
+			function (result) {
+				saveArrayBuffer(result, "scene.glb");
+			},
+			// called when there is an error in the generation
+			function (error) {
+				console.log("An error happened");
+			},
+			{ binary: true },
+		);
+	}
+
+	function saveArrayBuffer(buffer, filename) {
+		save(new Blob([buffer], { type: "application/octet-stream" }), filename);
+	}
+
+	const link = document.createElement("a");
+	link.style.display = "none";
+	document.body.appendChild(link); // Firefox workaround, see #6594
+
+	function save(blob, filename) {
+		link.href = URL.createObjectURL(blob);
+		link.download = filename;
+		link.click();
+
+		// URL.revokeObjectURL( url ); breaks Firefox...
+	}
+
+	const geometry3 = new THREE.BoxGeometry(1, 1, 1);
+	const material3 = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+	const mesh = new THREE.Mesh(geometry3, material3);
+	scene.add(mesh);
+
+	function animate() {
+		// controls.update();
+		requestAnimationFrame(animate);
+
+		// Increment progress (adjust 0.001 to change speed)
+		fraction += 0.00005;
+		if (fraction > 1) fraction = 0; // Loop back to start
+
+		// 1. Get the position at the current percentage of the path
+		const position = curve.getPoint(fraction);
+		const tangent = curve.getTangent(fraction);
+
+		// 2. Calculate Banking (Leaning)
+		// We look slightly ahead to see how sharp the next turn is
+		const lookAhead = Math.min(fraction + 0.01, 1);
+		const nextTangent = curve.getTangent(lookAhead);
+		// Cross product to find the horizontal change in direction
+		const side = new THREE.Vector3().crossVectors(tangent, nextTangent);
+		const bankAngle = side.y * 0.01; // Multiplier to amplify the lean intensity
+
+		const offset = new THREE.Vector3().copy(tangent).multiplyScalar(-10); // 10 units behind
+		offset.y += 15;
+
+		camera.position.copy(position).add(offset);
+		const lookTarget = position.clone().add(tangent.multiplyScalar(5));
+		camera.lookAt(lookTarget);
+		// camera.rotateOnAxis(new THREE.Vector3(0, 1, 0), bankAngle);
+
+		// camera.rotateX(- fraction + 0.1);
+
+		light.position.copy(camera.position);
+		renderer.render(scene, camera);
+	}
+
+	// Handle Resizing
+	window.addEventListener("resize", () => {
+		camera.aspect = window.innerWidth / window.innerHeight;
+		camera.updateProjectionMatrix();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+	});
+
+	animate();
+</script>
