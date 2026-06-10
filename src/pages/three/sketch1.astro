@@ -1,0 +1,121 @@
+---
+// Three.js points mesh + ShaderMaterial
+// https://gist.github.com/duhaime/822f81a578b47d6fd0be523e6f7efc78
+
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout />
+
+<script>
+	import * as THREE from "three";
+
+	let renderer: THREE.WebGLRenderer,
+		scene: THREE.Scene,
+		camera: THREE.PerspectiveCamera,
+		cloud: THREE.Points;
+
+	const vertexShaderSource = `
+		attribute float alpha;
+		varying float vAlpha;
+
+		void main() {
+			vAlpha = alpha;
+			vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+			gl_PointSize = 2.0;
+			gl_Position = projectionMatrix * mvPosition;
+		}
+	`;
+
+	const fragmentShaderSource = `
+		uniform vec3 color;
+		varying float vAlpha;
+
+		void main() {
+			gl_FragColor = vec4( color, vAlpha );
+		}
+	`;
+
+	init();
+	animate();
+
+	function init() {
+		// renderer
+		renderer = new THREE.WebGLRenderer();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+		document.body.appendChild(renderer.domElement);
+
+		// scene
+		scene = new THREE.Scene();
+
+		//camera
+		camera = new THREE.PerspectiveCamera(
+			45,
+			window.innerWidth / window.innerHeight,
+			1,
+			1000,
+		);
+		camera.position.z = 400;
+
+		// point cloud geometry
+		const geometry = new THREE.SphereGeometry(100, 160, 80);
+
+		// add an attribute
+		const numVertices = geometry.attributes.position.count;
+		const alphas = new Float32Array(numVertices * 1); // 1 values per vertex
+
+		for (let i = 0; i < numVertices; i++) {
+			// set alpha randomly
+			alphas[i] = Math.random();
+		}
+
+		geometry.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
+
+		// uniforms
+		const uniforms = {
+			color: { value: new THREE.Color(0xffff00) },
+		};
+
+		// point cloud material
+		const shaderMaterial = new THREE.ShaderMaterial({
+			uniforms: uniforms,
+			vertexShader: vertexShaderSource,
+			fragmentShader: fragmentShaderSource,
+			transparent: true,
+		});
+
+		// point cloud
+		cloud = new THREE.Points(geometry, shaderMaterial);
+		scene.add(cloud);
+	}
+
+	function animate() {
+		requestAnimationFrame(animate);
+		render();
+	}
+
+	function render() {
+		const alphas = cloud.geometry.attributes.alpha;
+		const count = alphas.count;
+		for (let i = 0; i < count; i++) {
+			// dynamically change alphas
+			alphas.array[i] *= 0.95;
+			if (alphas.array[i] < 0.01) {
+				alphas.array[i] = 1.0;
+			}
+		}
+
+		alphas.needsUpdate = true; // important!
+		cloud.rotation.x += 0.005;
+		cloud.rotation.y += 0.005;
+		renderer.render(scene, camera);
+	}
+
+	window.addEventListener("resize", () => {
+		camera.aspect = window.innerWidth / window.innerHeight;
+		camera.updateProjectionMatrix();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+	});
+
+	animate();
+</script>
