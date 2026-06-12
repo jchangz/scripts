@@ -1,0 +1,227 @@
+---
+import Layout from "../../layouts/Layout.astro";
+---
+
+<Layout />
+
+<script>
+	import * as THREE from "three";
+
+	let renderer: THREE.WebGLRenderer,
+		scene: THREE.Scene,
+		camera: THREE.PerspectiveCamera,
+		cloud: THREE.Points,
+		shaderMaterial;
+
+	const clock = new THREE.Clock();
+
+	const vertexShaderSource = `
+uniform float uTime;
+attribute float aCharacterIndex; 
+varying float vCharacterIndex;   
+
+void main() {
+    // Keep passing the character index down to the Fragment shader for flickering
+    vCharacterIndex = aCharacterIndex; 
+
+    // THE FIX: Use the raw, unaltered position vector. 
+    // Do not calculate distance, do not calculate angles, do not touch cos or sin.
+    vec3 pos = position; 
+    
+    // Convert the static position straight into view space
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    
+    // Scale the text box size cleanly based on camera depth
+    gl_PointSize = 36.0;
+}
+	`;
+
+	const fragmentShaderSource = `
+uniform sampler2D uSpritesheet;
+uniform float uTime;
+varying float vCharacterIndex; 
+
+void main() {
+    // 1. THE FIX: Define the exact columns and rows of your 104x56 asset
+    float cols = 13.0; 
+    float rows = 7.0;
+    float maxCharacters = 91.0; // 13 columns * 7 rows
+
+    // Optional dynamic flickering (keeps indices safely constrained between 0 and 90)
+    float changingIndex = mod(vCharacterIndex + floor(uTime * 1.0), maxCharacters);
+    
+    // 2. Calculate the specific grid coordinates for this character
+    float col = mod(changingIndex, cols);
+    // WebGL loops from bottom to top, so we calculate rows accordingly
+    float row = floor(changingIndex / cols);
+    
+    // 3. THE FIX: Scale gl_PointCoord relative to the unique rectangular aspect ratio
+    vec2 uv = vec2(gl_PointCoord.x, 1.0 - gl_PointCoord.y);
+    
+	float characterWidthRatio = 1.0;
+
+	uv.x = (uv.x - 0.5) / characterWidthRatio + 0.5;
+
+if (uv.x < 0.0 || uv.x > 1.0) {
+        discard;
+    }
+
+	uv = mix(vec2(0.005), vec2(0.995), uv);
+
+    // Shrink down the coordinate system to fit into one single cell
+    uv.x /= cols;
+    uv.y /= rows;
+    
+    // Shift the UV coordinate map to point at the correct cell slot
+    uv.x += col / cols;
+    uv.y += row / rows;
+    
+    // 4. Sample the pixel data from your public folder asset
+    vec4 texColor = texture2D(uSpritesheet, uv);
+    
+    // Discard transparent empty space pixels
+    if(texColor.a < 0.1) discard;
+    
+    // Output crisp terminal characters
+    gl_FragColor = vec4(texColor.rgb * vec3(0.1, 0.9, 0.4), texColor.a);
+}
+	`;
+
+	init();
+	animate();
+
+	function init() {
+		// renderer
+		renderer = new THREE.WebGLRenderer();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+		document.body.appendChild(renderer.domElement);
+
+		// scene
+		scene = new THREE.Scene();
+
+		const width = window.innerWidth;
+		const height = window.innerHeight;
+
+		//camera
+		camera = new THREE.OrthographicCamera(
+			width / -2, // Left
+			width / 2, // Right
+			height / 2, // Top
+			height / -2, // Bottom
+			1, // Near
+			1000, // Far
+		);
+		camera.position.z = 10;
+
+		const count = 300;
+
+		// 2. Create the blank geometry container
+		const geometry = new THREE.BufferGeometry();
+
+		// 2. Define your exact cell spacing in pixels
+		// Match these to whatever looks crisp with your gl_PointSize
+		const spacingX = 36.0;
+		const spacingY = 48.0;
+
+		// 3. THE FIX: Calculate exactly how many columns and rows fit on the screen
+		// We use Math.ceil to make sure the grid fills out the entire screen boundary
+		const columnsCount = Math.ceil(width / spacingX);
+		const rowsCount = Math.ceil(height / spacingY);
+		const totalPoints = columnsCount * rowsCount;
+
+		// 4. Instantiate your arrays using the dynamically calculated total
+		const positions = new Float32Array(totalPoints * 3);
+		const characterIndices = new Float32Array(totalPoints);
+
+		let index = 0;
+		for (let r = 0; r < rowsCount; r++) {
+			for (let c = 0; c < columnsCount; c++) {
+				// Map the grid so index (0,0) is centered perfectly on the screen
+				positions[index * 3] = (c - columnsCount / 2) * spacingX;
+				positions[index * 3 + 1] = (r - rowsCount / 2) * spacingY;
+				positions[index * 3 + 2] = 0;
+
+				characterIndices[index] = Math.floor(Math.random() * 91);
+				index++;
+			}
+		}
+		geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+		geometry.setAttribute(
+			"aCharacterIndex",
+			new THREE.BufferAttribute(characterIndices, 1),
+		);
+
+		// add an attribute
+		const numVertices = geometry.attributes.position.count;
+		const alphas = new Float32Array(numVertices * 1); // 1 values per vertex
+
+		for (let i = 0; i < numVertices; i++) {
+			// set alpha randomly
+			alphas[i] = Math.random();
+		}
+
+		geometry.setAttribute("alpha", new THREE.BufferAttribute(alphas, 1));
+
+		const textureLoader = new THREE.TextureLoader();
+
+		const spritesheetTexture = textureLoader.load("/thick_8x8.png");
+		spritesheetTexture.minFilter = THREE.NearestFilter;
+		spritesheetTexture.magFilter = THREE.NearestFilter;
+
+		// uniforms
+		const uniforms = {
+			uSpritesheet: { value: spritesheetTexture },
+			uTime: { value: 0.0 },
+		};
+
+		// point cloud material
+		shaderMaterial = new THREE.ShaderMaterial({
+			uniforms: uniforms,
+			vertexShader: vertexShaderSource,
+			fragmentShader: fragmentShaderSource,
+			transparent: true,
+		});
+
+		// point cloud
+		cloud = new THREE.Points(geometry, shaderMaterial);
+		scene.add(cloud);
+	}
+
+	function animate() {
+		requestAnimationFrame(animate);
+
+		const elapsedTime = clock.getElapsedTime();
+
+		shaderMaterial.uniforms.uTime.value = elapsedTime;
+
+		renderer.render(scene, camera);
+
+		render();
+	}
+
+	function render() {
+		const alphas = cloud.geometry.attributes.alpha;
+		const count = alphas.count;
+		for (let i = 0; i < count; i++) {
+			// dynamically change alphas
+			alphas.array[i] *= 0.95;
+			if (alphas.array[i] < 0.01) {
+				alphas.array[i] = 1.0;
+			}
+		}
+
+		alphas.needsUpdate = true; // important!
+		// cloud.rotation.x += 0.005;
+		// cloud.rotation.y += 0.005;
+		renderer.render(scene, camera);
+	}
+
+	window.addEventListener("resize", () => {
+		camera.aspect = window.innerWidth / window.innerHeight;
+		camera.updateProjectionMatrix();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+	});
+
+	animate();
+</script>
